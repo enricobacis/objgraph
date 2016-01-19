@@ -33,6 +33,7 @@ import sys
 import types
 import codecs
 import inspect
+import graphviz
 import operator
 import tempfile
 import itertools
@@ -365,7 +366,7 @@ def find_backref_chain(obj, predicate, max_depth=20, extra_ignore=()):
 
 def show_backrefs(objs, max_depth=3, extra_ignore=(), filter=None, too_many=10,
                   highlight=None, filename=None, extra_info=None,
-                  refcounts=False, shortnames=True, output=None):
+                  refcounts=False, shortnames=True, output=None, **kwargs):
     """Generate an object reference graph ending at ``objs``.
 
     The graph will show you what objects refer to ``objs``, directly and
@@ -436,7 +437,7 @@ def show_backrefs(objs, max_depth=3, extra_ignore=(), filter=None, too_many=10,
                 edge_func=gc.get_referrers, swap_source_target=False,
                 filename=filename, output=output, extra_info=extra_info,
                 refcounts=refcounts, shortnames=shortnames,
-                cull_func=is_proper_module)
+                cull_func=kwargs.get('cull_func', is_proper_module))
 
 
 def show_refs(objs, max_depth=3, extra_ignore=(), filter=None, too_many=10,
@@ -633,11 +634,13 @@ def _show_graph(objs, edge_func, swap_source_target,
             # Re-wrap it for utf-8
             import io
             f = io.TextIOWrapper(f.detach(), 'utf-8')
-    f.write('digraph ObjectGraph {\n'
-            '  node[shape=box, style=filled, fillcolor=white];\n')
+
+    G = graphviz.Digraph('ObjectGraph', node_attr=
+            {'shape': 'box', 'style': 'filled', 'fillcolor': 'white'})
     queue = []
     depth = {}
     ignore = set(extra_ignore)
+    ignore.add(id(G))
     ignore.add(id(objs))
     ignore.add(id(extra_ignore))
     ignore.add(id(queue))
@@ -648,7 +651,7 @@ def _show_graph(objs, edge_func, swap_source_target,
     ignore.add(id(sys._getframe(1)))  # show_refs/show_backrefs
     ignore.add(id(sys._getframe(1).f_locals))
     for obj in objs:
-        f.write('  %s[fontcolor=red];\n' % (_obj_node_id(obj)))
+        G.node(_obj_node_id(obj), fontcolor='red')
         depth[id(obj)] = 0
         queue.append(obj)
         del obj
@@ -660,10 +663,8 @@ def _show_graph(objs, edge_func, swap_source_target,
         # originally there was just show_backrefs() and we were
         # traversing the reference graph backwards.
         target = queue.pop(0)
-        tdepth = depth[id(target)]
-        f.write('  %s[label="%s"];\n' % (_obj_node_id(target),
-                                         _obj_label(target, extra_info,
-                                                    refcounts, shortnames)))
+        tdepth, tid = depth[id(target)], _obj_node_id(target)
+        G.node(tid, label=_obj_label(target,extra_info,refcounts,shortnames))
         h, s, v = _gradient((0, 0, 1), (0, 0, .3), tdepth, max_depth)
         if inspect.ismodule(target):
             h = .3
@@ -672,17 +673,14 @@ def _show_graph(objs, edge_func, swap_source_target,
             h = .6
             s = .6
             v = 0.5 + v * 0.5
-        f.write('  %s[fillcolor="%g,%g,%g"];\n'
-                % (_obj_node_id(target), h, s, v))
+        G.node(tid, fillcolor=("%g,%g,%g" % (h, s, v)))
         if v < 0.5:
-            f.write('  %s[fontcolor=white];\n' % (_obj_node_id(target)))
+            G.node(tid, fontcolor='white')
         if hasattr(getattr(target, '__class__', None), '__del__'):
-            f.write('  %s->%s_has_a_del[color=red,style=dotted,'
-                    'len=0.25,weight=10];\n' % (_obj_node_id(target),
-                                                _obj_node_id(target)))
-            f.write('  %s_has_a_del[label="__del__",shape=doublecircle,'
-                    'height=0.25,color=red,fillcolor="0,.5,1",fontsize=6];\n'
-                    % (_obj_node_id(target)))
+            G.edge(tid, tid + '_has_a_del', color='red', style='dotted',
+                   len='0.25', weight='10')
+            G.node(tid + '_has_a_del', label='__del__', shape='doublecircle',
+                   height='0.25', color='red', fillcolor='0,.5,1', fontsize='6')
         if tdepth >= max_depth:
             continue
         if cull_func is not None and cull_func(target):
@@ -704,8 +702,7 @@ def _show_graph(objs, edge_func, swap_source_target,
             else:
                 srcnode, tgtnode = source, target
             elabel = _edge_label(srcnode, tgtnode, shortnames)
-            f.write('  %s -> %s%s;\n' % (_obj_node_id(srcnode),
-                                         _obj_node_id(tgtnode), elabel))
+            G.edge(_obj_node_id(srcnode), _obj_node_id(tgtnode), **elabel)
             if id(source) not in depth:
                 depth[id(source)] = tdepth + 1
                 queue.append(source)
@@ -716,24 +713,19 @@ def _show_graph(objs, edge_func, swap_source_target,
             h, s, v = _gradient((0, 1, 1), (0, 1, .3), tdepth + 1, max_depth)
             if swap_source_target:
                 label = "%d more references" % skipped
-                edge = "%s->too_many_%s" % (_obj_node_id(target),
-                                            _obj_node_id(target))
+                edge = (tid, 'too_many_%s' % tid)
             else:
                 label = "%d more backreferences" % skipped
-                edge = "too_many_%s->%s" % (_obj_node_id(target),
-                                            _obj_node_id(target))
-            f.write('  %s[color=red,style=dotted,len=0.25,weight=10];\n'
-                    % edge)
-            f.write('  too_many_%s[label="%s",shape=box,height=0.25,'
-                    'color=red,fillcolor="%g,%g,%g",fontsize=6];\n'
-                    % (_obj_node_id(target), label, h, s, v))
-            f.write('  too_many_%s[fontcolor=white];\n'
-                    % (_obj_node_id(target)))
-    f.write("}\n")
+                edge = ('too_many_%s' % tid, tid)
+            G.edge(*edge, color='red', style='dotted', len='0.25', weight='10')
+            G.node('too_may_%s' % tid, label=label, shape='box', height='0.25',
+                   color='red', fillcolor='%g,%g,%g' % (h, s, v), fontsize='6')
+            G.node('too_may_%s' % tid, fontcolor='white')
     if output:
         return
     # The file should only be closed if this function was in charge of opening
     # the file.
+    f.write(G.source)
     f.close()
     print("Graph written to %s (%d nodes)" % (dot_filename, nodes))
     _present_graph(dot_filename, filename)
@@ -874,40 +866,40 @@ def _gradient(start_color, end_color, depth, max_depth):
 def _edge_label(source, target, shortnames=True):
     if (isinstance(target, dict) and
             target is getattr(source, '__dict__', None)):
-        return ' [label="__dict__",weight=10]'
+        return {'label': '__dict__', 'weight': '10'}
     if isinstance(source, types.FrameType):
         if target is source.f_locals:
-            return ' [label="f_locals",weight=10]'
+            return {'label': 'f_locals', 'weight': '10'}
         if target is source.f_globals:
-            return ' [label="f_globals",weight=10]'
+            return {'label': 'f_globals', 'weight': '10'}
     if isinstance(source, types.MethodType):
         try:
             if target is source.__self__:
-                return ' [label="__self__",weight=10]'
+                return {'label': '__self__', 'weight': '10'}
             if target is source.__func__:
-                return ' [label="__func__",weight=10]'
+                return {'label': '__func__', 'weight': '10'}
         except AttributeError:  # pragma: nocover
             # Python < 2.6 compatibility
             if target is source.im_self:
-                return ' [label="im_self",weight=10]'
+                return {'label': 'im_self', 'weight': '10'}
             if target is source.im_func:
-                return ' [label="im_func",weight=10]'
+                return {'label': 'im_func', 'weight': '10'}
     if isinstance(source, types.FunctionType):
         for k in dir(source):
             if target is getattr(source, k):
-                return ' [label="%s",weight=10]' % _quote(k)
+                return {'label': _quote(k), 'weight': '10'}
     if isinstance(source, dict):
         for k, v in iteritems(source):
             if v is target:
                 if isinstance(k, basestring) and _is_identifier(k):
-                    return ' [label="%s",weight=2]' % _quote(k)
+                    return {'label': _quote(k), 'weight': '2'}
                 else:
                     if shortnames:
                         tn = _short_typename(k)
                     else:
                         tn = _long_typename(k)
-                    return ' [label="%s"]' % _quote(tn + "\n" + _safe_repr(k))
-    return ''
+                    return {'label': _quote(tn + "\n" + _safe_repr(k))}
+    return {}
 
 
 _is_identifier = re.compile('[a-zA-Z_][a-zA-Z_0-9]*$').match

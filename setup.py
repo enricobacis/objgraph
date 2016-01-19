@@ -90,6 +90,7 @@ setup(name='objgraph',
       license='MIT',
       description='Draws Python object reference graphs with graphviz',
       long_description=get_description(),
+      requires=['graphviz'],
       classifiers=[
           'Intended Audience :: Developers',
           'License :: OSI Approved :: MIT License',
