@@ -26,17 +26,17 @@ Released under the MIT licence.
 # DEALINGS IN THE SOFTWARE.
 
 
-import codecs
 import gc
-import re
-import inspect
-import types
-import operator
 import os
-import subprocess
-import tempfile
+import re
 import sys
+import types
+import codecs
+import inspect
+import operator
+import tempfile
 import itertools
+import subprocess
 
 try:
     from types import InstanceType
